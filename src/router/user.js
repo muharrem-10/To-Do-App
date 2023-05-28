@@ -1,47 +1,81 @@
 const express = require('express')
 const User = require('../model/user')
-const router = new express.Router()
-
-// prefix routes ekle
-// db close open kur !!!
-// token add
-// authentication add
-// auth folder add
-// security add security
-// 
+const auth = require('../middleware/auth')
+const {connectDB, disconnectDB} = require('../db/mongoose')
+const userMeRouter = new express.Router()
+const userRouter = new express.Router()
 
 
-router.post('/user', async (req, res) => {
+const withDB = (req, res, next) => {
+    connectDB() // Bağlantıyı aç
+      .then(() => {
+        req.db = {
+          disconnect: disconnectDB // Bağlantıyı kapatmak için kullanılabilir
+        };
+        next();
+      })
+      .catch((error) => {
+        res.status(500).send('Veritabanı bağlantısı başarısız oldu');
+      });
+  };
+
+userRouter.post('/', withDB, async (req, res) => {
+    
     const user = new User(req.body)
-
     try {
         await user.save()
-        res.status(201).send({ user })
+        const token = await user.generateAuthToken()
+        res.status(201).send({ user, token })
     } catch (e) {
         res.status(400).send(e)
         console.log(e)
+    }finally {
+        await disconnectDB(); // Bağlantıyı kapat
     }
 })
 
-router.get('/users', async (req, res) => {
+userRouter.post('/login', withDB, async (req, res) => {
+
     try {
-        const users = await User.find({})
-        res.send(users)
+        const user = await User.findByCredentials(req.body.email, req.body.password)
+        const token = await user.generateAuthToken()
+        res.send({ user, token })
+    } catch (error) {
+        res.status(400).send("Geçersiz e-posta veya şifre." + error)
+
+    }finally {
+        await disconnectDB(); // Bağlantıyı kapat
+    }
+})
+
+userRouter.post('/logout', withDB, auth, async (req, res) => {
+
+    try {
+        req.user.tokens = req.user.tokens.filter((token) => {
+            return token.token !== req.token
+        })
+        await req.user.save()
+        res.send("Kullanıcı oturumu kapatıldı")
     } catch (e) {
         res.status(500).send(e)
+    }finally {
+        await disconnectDB(); // Bağlantıyı kapat
     }
+
 })
 
-router.get('/user/:id', async (req, res) => {
-    try {
-        const user = await User.findById(req.params.id)
-        res.send(user)
+userMeRouter.get('/', withDB, auth, async (req, res) => {
+    try { 
+        res.send(req.user)
     } catch (e) {
-        res.status(404).send(e)
+        res.status(500).send(e)
+    }finally {
+        await disconnectDB(); // Bağlantıyı kapat
     }
 })
 
-router.patch('/users/:id', async (req, res) => {
+userMeRouter.patch('/', withDB, auth, async (req, res) => {
+
     const updates = Object.keys(req.body)
     const allowedUpdates = ['name', 'email', 'password', 'age']
     const isValidOperation = updates.every((update) => allowedUpdates.includes(update))
@@ -51,42 +85,27 @@ router.patch('/users/:id', async (req, res) => {
     }
 
     try {
-        const user = await User.findOne({ _id: req.params.id})
-
-        if (!user) {
-            return res.status(404).send("kullanıcı bulunamadı")
-        }
-
-        updates.forEach((update) => user[update] = req.body[update])
-        await user.save()
-        res.send(user)
+        updates.forEach((update) => req.user[update] = req.body[update])
+        await req.user.save()
+        res.send(req.user)
     } catch (e) {
         res.status(400).send(e)
+    }finally {
+        await disconnectDB(); // Bağlantıyı kapat
     }
 })
 
-router.delete('/users/:id', async (req, res) => {
+userMeRouter.delete('/',withDB, auth, async (req, res) => {
+
     try {
-        const user = await User.findOneAndDelete({ _id: req.params.id})
-
-        if (!user) {
-            res.status(404).send("kullanıcı bulunamadı")
-        }
-
-        res.send(user)
+        await req.user.deleteOne()
+        res.send("Kullanıcı silindi")
     } catch (e) {
         res.status(500).send()
+    }finally {
+        await disconnectDB(); // Bağlantıyı kapat
     }
+
 })
 
-router.delete('/users', async (req, res) => {
-    try {
-        const user = await User.deleteMany({ })
-
-        res.send(user)
-    } catch (e) {
-        res.status(500).send()
-    }
-})
-
-module.exports = router
+module.exports = {userMeRouter, userRouter}
